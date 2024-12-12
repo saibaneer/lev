@@ -6,6 +6,7 @@ import {
   import { expect } from "chai";
   import hre from "hardhat";
 import { Pricefeed } from "../typechain-types/Pricefeed";
+import { Pricefeed__factory } from "../typechain-types";
 
 
   describe("Pricefeed Tests", function(){
@@ -13,7 +14,7 @@ import { Pricefeed } from "../typechain-types/Pricefeed";
         const [owner, otherAccount] = await hre.ethers.getSigners();
 
         const Pricefeed = await hre.ethers.getContractFactory("Pricefeed");
-        const pricefeed: Pricefeed = await Pricefeed.deploy();
+        const pricefeed = await Pricefeed.deploy();
 
 
         const StableCoin = await hre.ethers.getContractFactory("USDT");
