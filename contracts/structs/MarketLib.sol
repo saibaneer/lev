@@ -20,8 +20,12 @@ library MarketLib {
         uint256 totalLongSize;
         uint256 totalShortSize;
         uint256 decimals;
-        uint256 maximumLeverage;
+        uint256 maximumLeverage; // add a minimum leverage
     }
+
+    // struct AUM {
+
+    // }
 
     struct PositionParams {
         uint256 entryPrice;
@@ -40,8 +44,9 @@ library MarketLib {
         uint256 positionSize; //may be unneccesary
         bytes32 positionId; // unique identifier
         address positionOwner;
-        address priceFeedAddress; // asset address
+        // address priceFeedAddress; // asset address
         Direction longOrShort;
+        uint256 lastUpdatedTime;
     }
 
     function id(
@@ -85,7 +90,7 @@ library MarketLib {
         uint256 maintenanceMargin,
         PositionParams memory pos,
         uint256 userNonce
-    ) internal pure returns (UserPosition memory outputPosition) {
+    ) internal view returns (UserPosition memory outputPosition) {
         uint256 positionSize = estimatePositionSize(
             pos.leverage,
             pos.collateralAmount
@@ -107,8 +112,9 @@ library MarketLib {
             positionSize: positionSize,
             positionId: positionId,
             positionOwner: pos.positionOwner,
-            priceFeedAddress: pos.priceFeedAddress,
-            longOrShort: pos.longOrShort
+            // priceFeedAddress: pos.priceFeedAddress,
+            longOrShort: pos.longOrShort,
+            lastUpdatedTime: block.timestamp
         });
     }
 
