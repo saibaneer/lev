@@ -1,12 +1,30 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
+// Insertions: O(log n) average case
+// The insertion traverses downward through levels looking for the insertion point
+// Due to the skip list structure with MAX_LEVEL = 8, we get logarithmic search behavior
+// Each level cuts the search space roughly in half
+// The random level generation ensures balanced distribution
 
-//insertions - O(log n)
-// update - O(log n)
-//removal of the highest - O(1)
-// removal - O(log n)
-// read - O(1)
+
+// Highest Removal (removeHighest): O(1)
+// Direct access to highestNodeId
+// Just need to update pointers at each level the node exists in
+// MAX_LEVEL is constant (8), so pointer updates are constant time
+// No searching required
+
+
+// Non-highest Removal (remove): O(1)
+// Direct lookup using priceToId mapping
+// Like highest removal, just pointer updates at each level
+// No searching required since we have direct node access
+// MAX_LEVEL pointer updates are constant time
+
+
+// Read highest (getHighestPrice): O(1)
+// Direct access to highestNodeId
+// Single storage read
 
 library MaxSkipListV2 {
     uint8 constant MAX_LEVEL = 8;
@@ -36,7 +54,7 @@ library MaxSkipListV2 {
         uint256 n = nextId;
         uint8 level = 0;
         uint256 mask = 1;
-        
+
         while (level < MAX_LEVEL - 1 && (n & mask) == 0) {
             level++;
             mask <<= 1;
@@ -48,24 +66,37 @@ library MaxSkipListV2 {
         return priceAndBitmap >> 8;
     }
 
-    function getLevelBitmap(uint256 priceAndBitmap) internal pure returns (uint8) {
+    function getLevelBitmap(
+        uint256 priceAndBitmap
+    ) internal pure returns (uint8) {
         return uint8(priceAndBitmap & BITMAP_MASK);
     }
 
-    function packPriceAndBitmap(uint256 price, uint8 bitmap) internal pure returns (uint256) {
+    function packPriceAndBitmap(
+        uint256 price,
+        uint8 bitmap
+    ) internal pure returns (uint256) {
         return (price << 8) | bitmap;
     }
 
-    function packPointers(uint256 next, uint256 prev) internal pure returns (uint256) {
+    function packPointers(
+        uint256 next,
+        uint256 prev
+    ) internal pure returns (uint256) {
         return (next << 128) | (prev & ((1 << 128) - 1));
     }
 
-    function unpackPointers(uint256 packed) internal pure returns (uint256 next, uint256 prev) {
+    function unpackPointers(
+        uint256 packed
+    ) internal pure returns (uint256 next, uint256 prev) {
         next = packed >> 128;
         prev = packed & ((1 << 128) - 1);
     }
 
-    function insert(List storage self, uint256 price) internal returns (uint256 nodeId) {
+    function insert(
+        List storage self,
+        uint256 price
+    ) internal returns (uint256 nodeId) {
         require(price > 0 && price < (1 << 248), "Invalid price");
         require(self.priceToId[price] == 0, "Price exists");
 
@@ -73,7 +104,7 @@ library MaxSkipListV2 {
         uint256 freeId = self.firstFreeId;
         if (freeId != 0) {
             nodeId = freeId;
-            (next,) = unpackPointers(self.nodes[freeId].packedNextPrev[0]);
+            (next, ) = unpackPointers(self.nodes[freeId].packedNextPrev[0]);
             self.firstFreeId = next;
         } else {
             nodeId = self.nextId++;
@@ -81,9 +112,12 @@ library MaxSkipListV2 {
 
         uint8 newLevel = getLevel(nodeId);
         uint8 bitmap = uint8((1 << newLevel) - 1);
-        
+
         uint256 highestId = self.highestNodeId;
-        if (self.length == 0 || price > getPrice(self.nodes[highestId].priceAndBitmap)) {
+        if (
+            self.length == 0 ||
+            price > getPrice(self.nodes[highestId].priceAndBitmap)
+        ) {
             self.highestNodeId = nodeId;
         }
 
@@ -95,8 +129,13 @@ library MaxSkipListV2 {
 
         for (uint8 i = MAX_LEVEL - 1; i < MAX_LEVEL; i--) {
             while (true) {
-                (next,) = unpackPointers(self.nodes[current].packedNextPrev[i]);
-                if (next == 0 || getPrice(self.nodes[next].priceAndBitmap) < price) break;
+                (next, ) = unpackPointers(
+                    self.nodes[current].packedNextPrev[i]
+                );
+                if (
+                    next == 0 ||
+                    getPrice(self.nodes[next].priceAndBitmap) < price
+                ) break;
                 current = next;
             }
             updates[i] = current;
@@ -105,15 +144,23 @@ library MaxSkipListV2 {
         for (uint8 i = 0; i <= newLevel; i++) {
             if ((bitmap & (1 << i)) != 0) {
                 uint256 updateNode = updates[i];
-                (next,) = unpackPointers(self.nodes[updateNode].packedNextPrev[i]);
-                
+                (next, ) = unpackPointers(
+                    self.nodes[updateNode].packedNextPrev[i]
+                );
+
                 newNode.packedNextPrev[i] = packPointers(next, updateNode);
-                
+
                 if (next != 0) {
-                    self.nodes[next].packedNextPrev[i] = packPointers(next, nodeId);
+                    self.nodes[next].packedNextPrev[i] = packPointers(
+                        next,
+                        nodeId
+                    );
                 }
-                
-                self.nodes[updateNode].packedNextPrev[i] = packPointers(nodeId, updateNode);
+
+                self.nodes[updateNode].packedNextPrev[i] = packPointers(
+                    nodeId,
+                    updateNode
+                );
             }
         }
 
@@ -124,14 +171,14 @@ library MaxSkipListV2 {
 
     function removeHighest(List storage self) internal returns (bool) {
         require(self.length > 0, "Empty list");
-        
+
         uint256 nodeId = self.highestNodeId;
         Node storage node = self.nodes[nodeId];
         uint256 priceAndBitmap = node.priceAndBitmap;
         uint256 next;
         uint256 prev;
-        
-        (next,) = unpackPointers(node.packedNextPrev[0]);
+
+        (next, ) = unpackPointers(node.packedNextPrev[0]);
         self.highestNodeId = next;
 
         uint8 bitmap = getLevelBitmap(priceAndBitmap);
@@ -139,10 +186,16 @@ library MaxSkipListV2 {
             if ((bitmap & (1 << i)) != 0) {
                 (next, prev) = unpackPointers(node.packedNextPrev[i]);
                 if (prev != 0) {
-                    self.nodes[prev].packedNextPrev[i] = packPointers(next, prev);
+                    self.nodes[prev].packedNextPrev[i] = packPointers(
+                        next,
+                        prev
+                    );
                 }
                 if (next != 0) {
-                    self.nodes[next].packedNextPrev[i] = packPointers(next, prev);
+                    self.nodes[next].packedNextPrev[i] = packPointers(
+                        next,
+                        prev
+                    );
                 }
             }
         }
@@ -152,12 +205,14 @@ library MaxSkipListV2 {
 
         delete self.priceToId[getPrice(priceAndBitmap)];
         self.length--;
-        
+
         emit NodeRemoved(nodeId, getPrice(priceAndBitmap));
         return true;
     }
 
-    function getHighestPrice(List storage self) internal view returns (uint256) {
+    function getHighestPrice(
+        List storage self
+    ) internal view returns (uint256) {
         require(self.length > 0, "Empty list");
         return getPrice(self.nodes[self.highestNodeId].priceAndBitmap);
     }
@@ -167,5 +222,57 @@ library MaxSkipListV2 {
         self.head = 0;
         self.nextId = 1;
         self.firstFreeId = 0;
+    }
+
+    function remove(List storage self, uint256 price) internal returns (bool) {
+        require(self.length > 0, "Empty list");
+        uint256 nodeId = self.priceToId[price];
+        require(nodeId != 0, "Price not found");
+
+        Node storage node = self.nodes[nodeId];
+        uint256 priceAndBitmap = node.priceAndBitmap;
+        uint256 next;
+        uint256 prev;
+
+        // If we're removing the highest node, update highestNodeId
+        if (nodeId == self.highestNodeId) {
+            (next, ) = unpackPointers(node.packedNextPrev[0]);
+            self.highestNodeId = next;
+        }
+
+        // Remove node from all levels it exists in
+        uint8 bitmap = getLevelBitmap(priceAndBitmap);
+        for (uint8 i = 0; i < MAX_LEVEL; i++) {
+            if ((bitmap & (1 << i)) != 0) {
+                (next, prev) = unpackPointers(node.packedNextPrev[i]);
+                if (prev != 0) {
+                    self.nodes[prev].packedNextPrev[i] = packPointers(
+                        next,
+                        prev
+                    );
+                }
+                if (next != 0) {
+                    self.nodes[next].packedNextPrev[i] = packPointers(
+                        next,
+                        prev
+                    );
+                }
+            }
+        }
+
+        // Add the node to the free list
+        node.packedNextPrev[0] = packPointers(self.firstFreeId, 0);
+        self.firstFreeId = nodeId;
+
+        // Clean up the price mapping and decrease length
+        delete self.priceToId[price];
+        self.length--;
+
+        emit NodeRemoved(nodeId, price);
+        return true;
+    }
+
+    function exists(List storage self, uint256 price) internal view returns (bool) {
+        return self.priceToId[price] != 0;
     }
 }

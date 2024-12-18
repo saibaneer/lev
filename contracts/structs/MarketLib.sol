@@ -1,7 +1,13 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.28;
 
+import "./MaxSkipListV2Lib.sol";
+import "./MinSkipListV2Lib.sol";
+
 library MarketLib {
+    using MaxSkipListV2 for MaxSkipListV2.List;
+    using MinSkipListV2 for MinSkipListV2.List;
+
     enum Direction {
         Long,
         Short
@@ -23,10 +29,6 @@ library MarketLib {
         uint256 maximumLeverage; // add a minimum leverage
     }
 
-    // struct AUM {
-
-    // }
-
     struct PositionParams {
         uint256 entryPrice;
         uint256 leverage;
@@ -37,6 +39,7 @@ library MarketLib {
     }
 
     struct UserPosition {
+        address pricefeedAddress;
         uint256 liquidationPrice;
         uint256 entryPrice;
         uint256 leverage;
@@ -44,17 +47,19 @@ library MarketLib {
         uint256 positionSize; //may be unneccesary
         bytes32 positionId; // unique identifier
         address positionOwner;
-        // address priceFeedAddress; // asset address
         Direction longOrShort;
         uint256 lastUpdatedTime;
+        int256 cumulativeFundingValue;
+        int256 profitOrLoss;
     }
 
     function id(
         address positionOwner,
-        uint256 userNonce
+        uint256 userNonce,
+        address pricefeedAddress
     ) internal pure returns (bytes32) {
         bytes32 positionId = keccak256(
-            abi.encodePacked(positionOwner, userNonce)
+            abi.encodePacked(positionOwner, userNonce, pricefeedAddress) //too simple will add more variables before audit
         );
         return positionId;
     }
@@ -89,7 +94,8 @@ library MarketLib {
     function createUserPosition(
         uint256 maintenanceMargin,
         PositionParams memory pos,
-        uint256 userNonce
+        uint256 userNonce,
+        address pricefeedAddress
     ) internal view returns (UserPosition memory outputPosition) {
         uint256 positionSize = estimatePositionSize(
             pos.leverage,
@@ -102,9 +108,10 @@ library MarketLib {
             maintenanceMargin,
             pos.longOrShort
         );
-        bytes32 positionId = id(pos.positionOwner, userNonce);
+        bytes32 positionId = id(pos.positionOwner, userNonce, pricefeedAddress);
 
         outputPosition = UserPosition({
+            pricefeedAddress: pricefeedAddress,
             liquidationPrice: liquidationPrice,
             entryPrice: pos.entryPrice,
             leverage: pos.leverage,
@@ -112,11 +119,70 @@ library MarketLib {
             positionSize: positionSize,
             positionId: positionId,
             positionOwner: pos.positionOwner,
-            // priceFeedAddress: pos.priceFeedAddress,
             longOrShort: pos.longOrShort,
-            lastUpdatedTime: block.timestamp
+            lastUpdatedTime: block.timestamp,
+            cumulativeFundingValue: 0,
+            profitOrLoss: 0
         });
     }
+
+    function removePositionFromLiquidationMappings(
+        bytes32 positionId,
+        uint256 liquidationPrice,
+        mapping(uint256 => bytes32[]) storage liquidationMappings
+    ) internal {
+        require(
+            liquidationMappings[liquidationPrice].length > 0,
+            "No positions for this price"
+        );
+        if (liquidationMappings[liquidationPrice].length == 1) {
+            if (liquidationMappings[liquidationPrice][0] == positionId) {
+                liquidationMappings[liquidationPrice].pop();
+            }
+        } else {
+            bytes32[] storage inStorageIds = liquidationMappings[
+                liquidationPrice
+            ];
+            uint256 lastIndex = inStorageIds.length - 1;
+            for (uint256 i; i < inStorageIds.length; i++) {
+                if (inStorageIds[i] == positionId) {
+                    // Swap the element to be removed with the last element
+                    if (i != lastIndex) {
+                        inStorageIds[i] = inStorageIds[lastIndex];
+                    }
+                    // Remove the last element
+                    inStorageIds.pop();
+                    break;
+                }
+            }
+        }
+    }
+
+    function getNewLiquidationPriceAfterCollateralChange(
+    bytes32 positionId,
+    int256 collateralChange,
+    uint256 maintainanceMargin,
+    mapping(bytes32 => UserPosition) storage userPositionMappings
+) internal view returns (uint256) {
+    UserPosition storage pos = userPositionMappings[positionId];
+    
+    // Convert to signed for safe math
+    int256 currentCollateral = int256(pos.collateral);
+    int256 newCollateralSigned = currentCollateral + collateralChange;
+    
+    // Ensure new collateral is positive
+    require(newCollateralSigned > 0, "Invalid collateral amount");
+    
+    uint256 newCollateral = uint256(newCollateralSigned);
+    
+    return estimateLiquidationPrice(
+        pos.entryPrice,
+        pos.leverage,
+        newCollateral,
+        maintainanceMargin,
+        pos.longOrShort
+    );
+}
 
     function createNewMarket(
         MarketCreationParams calldata newMarket,
@@ -150,5 +216,99 @@ library MarketLib {
         mapping(address => LeverageMarket) storage allMarkets
     ) internal {
         allMarkets[pricefeedAddress].maximumLeverage = newLeverageValue;
+    }
+
+    function checkIfLiquidationPriceExists(
+        uint256 liquidationPrice,
+        mapping(uint256 => bytes32[]) storage liquidationMappings
+    ) internal view returns (bool) {
+        return liquidationMappings[liquidationPrice].length == 0 ? false : true;
+    }
+
+    function addToTotalMarketPositions(
+        UserPosition calldata userPos,
+        mapping(address => LeverageMarket) storage markets,
+        address _pricefeed
+    ) internal {
+        require(
+            markets[_pricefeed].priceFeedAddress == _pricefeed,
+            "Bad market address"
+        );
+        if (userPos.longOrShort == Direction.Long) {
+            markets[_pricefeed].totalLongSize += userPos.positionSize;
+        } else {
+            markets[_pricefeed].totalShortSize += userPos.positionSize;
+        }
+    }
+
+    function reduceFromTotalMarketPositions(
+        UserPosition calldata userPos,
+        mapping(address => LeverageMarket) storage markets,
+        address _pricefeed
+    ) internal {
+        require(
+            markets[_pricefeed].priceFeedAddress == _pricefeed,
+            "Bad market address"
+        );
+        if (userPos.longOrShort == Direction.Long) {
+            markets[_pricefeed].totalLongSize -= userPos.positionSize;
+        } else {
+            markets[_pricefeed].totalShortSize -= userPos.positionSize;
+        }
+    }
+
+    function cleanupSkipLists(
+        UserPosition storage pos,
+        mapping(uint256 => bytes32[]) storage liquidationMappings,
+        MaxSkipListV2.List storage priceListLongs,
+        MinSkipListV2.List storage priceListShorts
+    ) internal {
+        if (
+            priceListLongs.exists(pos.liquidationPrice) &&
+            liquidationMappings[pos.liquidationPrice].length < 2
+        ) {
+            //check the length
+            require(
+                liquidationMappings[pos.liquidationPrice][0] == pos.positionId,
+                "Cannot modify this long position in list"
+            );
+            priceListLongs.remove(pos.liquidationPrice);
+        } else if (
+            priceListShorts.exists(pos.liquidationPrice) &&
+            liquidationMappings[pos.liquidationPrice].length < 2
+        ) {
+            require(
+                liquidationMappings[pos.liquidationPrice][0] == pos.positionId,
+                "Cannot modify this short position in list"
+            );
+            priceListShorts.remove(pos.liquidationPrice);
+        }
+    }
+
+    function pushPosition(
+        MarketLib.UserPosition memory createdPosition,
+        mapping(uint256 => bytes32[]) storage liquidationMappings,
+        MaxSkipListV2.List storage priceListLongs,
+        MinSkipListV2.List storage priceListShorts
+    ) internal {
+        uint256 liquidationPrice = createdPosition.liquidationPrice;
+        bytes32 positionId = createdPosition.positionId;
+
+        // Insert into skiplist if this is first position at this liquidation price
+        if (
+            !checkIfLiquidationPriceExists(
+                liquidationPrice,
+                liquidationMappings
+            )
+        ) {
+            if (createdPosition.longOrShort == MarketLib.Direction.Long) {
+                priceListLongs.insert(liquidationPrice);
+            } else {
+                priceListShorts.insert(liquidationPrice);
+            }
+        }
+
+        // Add position to liquidation mappings
+        liquidationMappings[liquidationPrice].push(positionId);
     }
 }

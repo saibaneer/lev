@@ -2,11 +2,14 @@
 pragma solidity ^0.8.28;
 
 import "@openzeppelin/contracts/utils/structs/Heap.sol";
+import "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
+import "./IPositionManager.sol";
+import "./IMarketRegistry.sol";
 import "./structs/MarketLib.sol";
 import "./structs/MaxSkipListV2Lib.sol";
 import "./structs/MinSkipListV2Lib.sol";
 
-contract PositionManager {
+contract PositionManager is Initializable, IPositionManager {
     using MarketLib for *;
 
     using MaxSkipListV2 for MaxSkipListV2.List;
@@ -16,36 +19,103 @@ contract PositionManager {
     MinSkipListV2.List private priceListShorts;
 
     address public pricefeedAddress;
+    address public marketRegistry;
     mapping(uint256 => bytes32[]) public liquidationMappings;
     mapping(bytes32 => MarketLib.UserPosition) public userPositionMappings;
-    constructor(address _pricefeed) {
-        // Add address zero checks
+    mapping(address => uint256) public userNonce;
+    uint8 public maintenanceMargin;
+
+    function initialize(
+        address _pricefeed,
+        address _marketRegistry,
+        uint8 _maintenanceMargin
+    ) public initializer {
         priceListLongs.initialize();
         priceListShorts.initialize();
-
+        pricefeedAddress = _pricefeed;
+        maintenanceMargin = _maintenanceMargin;
+        marketRegistry = _marketRegistry;
     }
 
-    function createPosition() external {
-        //TODO : user passes in position variables and creates position
-        //TODO : we check if the liquidation price already exists.
-        // if it does not exist, we had it to the skiplist, and also store it on the liquidation mappings, and push position
-        // if it does exist, we simply push position into the liquidation mappings
-        // update the global long or shorts 
+    function createPosition(
+        MarketLib.PositionParams memory newPosition
+    ) external {
+        require(msg.sender == newPosition.positionOwner, "Sender != Owner");
+        // rmbr to add the deposit to vault call.
+        userNonce[newPosition.positionOwner] += 1;
+        MarketLib.UserPosition memory createdPosition = MarketLib
+            .createUserPosition(
+                maintenanceMargin,
+                newPosition,
+                userNonce[newPosition.positionOwner],
+                pricefeedAddress
+            );
+
+        MarketLib.pushPosition(createdPosition, liquidationMappings, priceListLongs, priceListShorts);
+        // update the global long or shorts
+        IMarketRegistry(marketRegistry).addToTotalMarketPositions(
+                createdPosition,
+                pricefeedAddress
+            );
         // emit an event to indicate that a new position has been added
     }
 
-    function modifyPosition() external {}
+    function updatePosition(bytes32 positionId, int256 amountToAdd) external {
+    // dont forget to transfer the tokens
+    // dont foget to update the AUM
+    MarketLib.UserPosition storage pos = userPositionMappings[positionId];
+    require(pos.positionOwner != address(0), "Position does not exist");
+    //who is making the modification?
+    require(pos.positionOwner == msg.sender, "Unauthorized access!");
+
+    //only cleanup if the liquidation price previously exists, and the positionId is the only one with that liquidation price
+    MarketLib.cleanupSkipLists(pos, liquidationMappings, priceListLongs, priceListShorts);
+
+    MarketLib.removePositionFromLiquidationMappings(positionId, pos.liquidationPrice, liquidationMappings);
+    uint256 newLiquidationPrice = MarketLib.getNewLiquidationPriceAfterCollateralChange(positionId, amountToAdd, maintenanceMargin, userPositionMappings);
+    
+    //update the info in userPositions
+    pos.liquidationPrice = newLiquidationPrice;
+    
+    // Handle collateral update safely
+    if (amountToAdd >= 0) {
+        pos.collateral += uint256(amountToAdd);
+    } else {
+        require(pos.collateral >= uint256(-amountToAdd), "Insufficient collateral");
+        pos.collateral -= uint256(-amountToAdd);
+    }
+
+    //add new liquidation price & id to mappings
+    MarketLib.pushPosition(pos, liquidationMappings, priceListLongs, priceListShorts);
+
+    //emit event to indicate added position
+}
+
+    
 
     function closePosition() external {}
 
     function liqudatePosition() external {}
 
-    function getTopLongsByBytes32() external view returns(bytes32[] memory){}
-    function getTopLongsByObject() external view returns(MarketLib.UserPosition[] memory){}
+    function getTopLongsByBytes32() external view returns (bytes32[] memory) {}
 
-    function getTopShortsByBytes32() external view returns(bytes32[] memory){}
-    function getTopShortssByObject() external view returns(MarketLib.UserPosition[] memory){}
+    function getTopLongsByObject()
+        external
+        view
+        returns (MarketLib.UserPosition[] memory)
+    {}
 
-    function updateTotalLongsOnMarket() external{}
-    function updateTotalShortsOnMarket() external{}
+    function getTopShortsByBytes32() external view returns (bytes32[] memory) {}
+
+    function getTopShortssByObject()
+        external
+        view
+        returns (MarketLib.UserPosition[] memory)
+    {}
+
+    function updateTotalLongsOnMarket() external {}
+
+    function updateTotalShortsOnMarket() external {}
+
+
 }

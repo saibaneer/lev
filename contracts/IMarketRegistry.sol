@@ -17,7 +17,7 @@ interface IMarketRegistry {
         uint256 newLeverageValue
     ) external;
 
-    function updateTotalLongs() external;
+    function addToTotalMarketPositions(MarketLib.UserPosition calldata userPos, address _pricefeed) external;
 
-    function updateTotalShorts() external;
+    function reduceFromTotalMarketPositions(MarketLib.UserPosition calldata userPos, address _pricefeed) external;
 }
