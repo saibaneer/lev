@@ -3,6 +3,8 @@ pragma solidity ^0.8.28;
 
 import "./MaxSkipListV2Lib.sol";
 import "./MinSkipListV2Lib.sol";
+import "@openzeppelin/contracts/utils/math/Math.sol";
+import "@openzeppelin/contracts/utils/math/SignedMath.sol";
 
 library MarketLib {
     using MaxSkipListV2 for MaxSkipListV2.List;
@@ -158,31 +160,64 @@ library MarketLib {
         }
     }
 
+    function removePositionFromUserPositionIdMappings(
+        bytes32 positionId,
+        address positionOwner,
+        mapping(address => bytes32[]) storage userToPositionMappings
+    ) internal {
+        require(
+            userToPositionMappings[positionOwner].length > 0,
+            "No positions for this user"
+        );
+        if (userToPositionMappings[positionOwner].length == 1) {
+            if (userToPositionMappings[positionOwner][0] == positionId) {
+                userToPositionMappings[positionOwner].pop();
+            }
+        } else {
+            bytes32[] storage inStorageIds = userToPositionMappings[
+                positionOwner
+            ];
+            uint256 lastIndex = inStorageIds.length - 1;
+            for (uint256 i; i < inStorageIds.length; i++) {
+                if (inStorageIds[i] == positionId) {
+                    // Swap the element to be removed with the last element
+                    if (i != lastIndex) {
+                        inStorageIds[i] = inStorageIds[lastIndex];
+                    }
+                    // Remove the last element
+                    inStorageIds.pop();
+                    break;
+                }
+            }
+        }
+    }
+
     function getNewLiquidationPriceAfterCollateralChange(
-    bytes32 positionId,
-    int256 collateralChange,
-    uint256 maintainanceMargin,
-    mapping(bytes32 => UserPosition) storage userPositionMappings
-) internal view returns (uint256) {
-    UserPosition storage pos = userPositionMappings[positionId];
-    
-    // Convert to signed for safe math
-    int256 currentCollateral = int256(pos.collateral);
-    int256 newCollateralSigned = currentCollateral + collateralChange;
-    
-    // Ensure new collateral is positive
-    require(newCollateralSigned > 0, "Invalid collateral amount");
-    
-    uint256 newCollateral = uint256(newCollateralSigned);
-    
-    return estimateLiquidationPrice(
-        pos.entryPrice,
-        pos.leverage,
-        newCollateral,
-        maintainanceMargin,
-        pos.longOrShort
-    );
-}
+        bytes32 positionId,
+        int256 collateralChange,
+        uint256 maintainanceMargin,
+        mapping(bytes32 => UserPosition) storage userPositionMappings
+    ) internal view returns (uint256) {
+        UserPosition storage pos = userPositionMappings[positionId];
+
+        // Convert to signed for safe math
+        int256 currentCollateral = int256(pos.collateral);
+        int256 newCollateralSigned = currentCollateral + collateralChange;
+
+        // Ensure new collateral is positive
+        require(newCollateralSigned > 0, "Invalid collateral amount");
+
+        uint256 newCollateral = uint256(newCollateralSigned);
+
+        return
+            estimateLiquidationPrice(
+                pos.entryPrice,
+                pos.leverage,
+                newCollateral,
+                maintainanceMargin,
+                pos.longOrShort
+            );
+    }
 
     function createNewMarket(
         MarketCreationParams calldata newMarket,
@@ -286,7 +321,7 @@ library MarketLib {
     }
 
     function pushPosition(
-        MarketLib.UserPosition memory createdPosition,
+        UserPosition memory createdPosition,
         mapping(uint256 => bytes32[]) storage liquidationMappings,
         MaxSkipListV2.List storage priceListLongs,
         MinSkipListV2.List storage priceListShorts
@@ -310,5 +345,131 @@ library MarketLib {
 
         // Add position to liquidation mappings
         liquidationMappings[liquidationPrice].push(positionId);
+    }
+
+    function calculatePnL(
+        UserPosition memory userPosition,
+        uint256 currentPrice,
+        uint256 minimumPrice,
+        uint256 minimumPositionSize,
+        uint256 minimumPnl
+    ) internal view returns (int256) {
+        // Input validation
+        require(userPosition.entryPrice >= minimumPrice, "Entry price too low");
+        require(currentPrice >= minimumPrice, "Current price too low");
+        require(
+            userPosition.positionSize >= minimumPositionSize,
+            "Position too small"
+        );
+
+        int256 size = int256(userPosition.positionSize);
+        int256 entryPrice = int256(userPosition.entryPrice);
+        int256 current = int256(currentPrice);
+
+        // Use OpenZeppelin's Math.max for uint256s
+        uint256 maxPrice = Math.max(userPosition.entryPrice, currentPrice);
+
+        // Check for overflow before multiplication
+        require(
+            size <= type(int256).max / int256(maxPrice),
+            "Position size too large"
+        );
+
+        int256 pnl;
+        if (userPosition.longOrShort == Direction.Long) {
+            // Prevent underflow in price difference
+            require(
+                current >= entryPrice - type(int256).max / size,
+                "Price difference too large"
+            );
+            require(
+                current <= entryPrice + type(int256).max / size,
+                "Price difference too large"
+            );
+
+            int256 priceDiff = current - entryPrice;
+            pnl = (size * priceDiff) / entryPrice;
+        } else {
+            // Similar checks for short positions
+            require(
+                entryPrice >= current - type(int256).max / size,
+                "Price difference too large"
+            );
+            require(
+                entryPrice <= current + type(int256).max / size,
+                "Price difference too large"
+            );
+
+            int256 priceDiff = entryPrice - current;
+            pnl = (size * priceDiff) / entryPrice;
+        }
+
+        // Handle dust amounts using OpenZeppelin's SignedMath.abs
+        if (SignedMath.abs(pnl) < minimumPnl) {
+            return 0;
+        }
+
+        return pnl;
+    }
+
+    function validateLiquidation(
+        UserPosition storage pos,
+        address liquidator
+    ) internal view {
+        require(pos.positionOwner != address(0), "Position does not exist");
+        require(
+            pos.positionOwner != liquidator,
+            "You cannot liquidate your own position"
+        );
+    }
+
+    function isLiquidatable(
+        UserPosition storage pos,
+        uint256 currentPrice
+    ) internal view returns (bool) {
+        if (pos.longOrShort == MarketLib.Direction.Long) {
+            return currentPrice <= pos.liquidationPrice;
+        } else {
+            return currentPrice >= pos.liquidationPrice;
+        }
+    }
+
+    function calculateFees(
+        uint256 collateral
+    ) internal pure returns (uint256 liquidationFee, uint256 vaultFunds) {
+        liquidationFee = (5 * collateral) / 100;
+        vaultFunds = collateral - liquidationFee;
+        return (liquidationFee, vaultFunds);
+    }
+
+    function cleanupPosition(
+        MarketLib.UserPosition storage pos,
+        bytes32 positionId,
+        mapping(address => bytes32[]) storage userToPositionMappings,
+        mapping(uint256 => bytes32[]) storage liquidationMappings,
+        mapping(bytes32 => UserPosition) storage idToPositionMappings,
+        MaxSkipListV2.List storage priceListLongs,
+        MinSkipListV2.List storage priceListShorts
+    ) internal {
+        MarketLib.removePositionFromUserPositionIdMappings(
+            pos.positionId,
+            pos.positionOwner,
+            userToPositionMappings
+        );
+
+        MarketLib.removePositionFromLiquidationMappings(
+            positionId,
+            pos.liquidationPrice,
+            liquidationMappings
+        );
+
+        MarketLib.cleanupSkipLists(
+            pos,
+            liquidationMappings,
+            priceListLongs,
+            priceListShorts
+        );
+
+        delete idToPositionMappings[positionId];
     }
 }
