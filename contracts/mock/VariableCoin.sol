@@ -7,9 +7,9 @@ import {ERC20Permit} from "@openzeppelin/contracts/token/ERC20/extensions/ERC20P
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 
 contract VariableToken is ERC20, Ownable, ERC20Permit {
-    constructor(address initialOwner)
+    constructor()
         ERC20("VariableToken", "VBT")
-        Ownable(initialOwner)
+        Ownable(msg.sender)
         ERC20Permit("VariableToken")
 
     {

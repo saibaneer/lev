@@ -4,7 +4,7 @@ import {
   } from "@nomicfoundation/hardhat-toolbox/network-helpers";
   import { anyValue } from "@nomicfoundation/hardhat-chai-matchers/withArgs";
   import { expect } from "chai";
-  import hre from "hardhat";
+  import hre, { ethers } from "hardhat";
 import { Pricefeed } from "../typechain-types/Pricefeed";
 import { Pricefeed__factory } from "../typechain-types";
 
@@ -24,13 +24,14 @@ import { Pricefeed__factory } from "../typechain-types";
     }
 
     describe("Basic Test", function(){
-        it.only("should set a token price", async function(){
+        it("should set a token price", async function(){
             const {pricefeed, owner,stablecoin} = await loadFixture(deployPriceFeed);
             const price = 5000;
+            // const otherPrice = ethers.parseUnits("2512", 18);
             await pricefeed.connect(owner).setPrice(price, stablecoin.target);
             const priceFromContract = await pricefeed.getAssetPrice(stablecoin.target);
+            console.log({priceFromContract})
             expect(priceFromContract).to.equal(5000)
-
         })
     })
   })
