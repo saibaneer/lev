@@ -7,7 +7,7 @@ import "./IPositionManager.sol";
 import "./IVault.sol";
 import "./IMarketRegistry.sol";
 import "./structs/MarketLib.sol";
-import "./structs/MaxSkipListV2Lib.sol";
+import "./structs/TestMaxSkipListV2Lib.sol";
 import "./structs/MinSkipListV2Lib.sol";
 import "./structs/ConstantsLib.sol";
 import "./structs/ErrorLib.sol";
@@ -116,7 +116,11 @@ contract PositionManager is Initializable, IPositionManager {
             priceListLongs,
             priceListShorts
         );
+        // liquidationMappings[createdPosition.liquidationPrice].push(createdPosition.positionId);
         userToPositionMappings[msg.sender].push(createdPosition.positionId);
+        // Store the position data in idToPositionMappings
+        idToPositionMappings[createdPosition.positionId] = createdPosition;
+
         IMarketRegistry(marketRegistry).addToTotalMarketPositions(
             createdPosition,
             pricefeedAddress
@@ -302,6 +306,10 @@ contract PositionManager is Initializable, IPositionManager {
         return userToPositionMappings[_user];
     }
 
+    function getLiquidationMappingsFromPrice(uint256 price) external view returns(bytes32[] memory){
+        return liquidationMappings[price];
+    }
+
     function getTopLongsByBytes32() external view returns (bytes32[] memory) {
         uint256 highestLong = priceListLongs.getHighestPrice();
         return liquidationMappings[highestLong];
@@ -327,7 +335,7 @@ contract PositionManager is Initializable, IPositionManager {
         // Fill array with positions
         for (uint256 i; i < liquidationMappings[highestLong].length; i++) {
             allPositions[i] = idToPositionMappings[
-                positionsAtPrice[highestLong][i]
+                positionsAtPrice[i]
             ];
         }
         return allPositions;

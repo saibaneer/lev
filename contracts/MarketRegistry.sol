@@ -5,6 +5,7 @@ import "./IMarketRegistry.sol";
 import "./structs/MarketLib.sol";
 import "./IPositionManager.sol";
 import "@openzeppelin/contracts/proxy/Clones.sol";
+import "hardhat/console.sol";
 
 contract MarketRegistry is IMarketRegistry {
     using Clones for address;
@@ -19,7 +20,7 @@ contract MarketRegistry is IMarketRegistry {
 
     function createNewMarket(
         MarketLib.MarketCreationParams calldata newMarket
-    ) external {
+    ) external returns(address) {
         //require that the market does not previously exist.
         require(vaultAddress != address(0), "Set vault address");
         
@@ -34,6 +35,9 @@ contract MarketRegistry is IMarketRegistry {
             collateralTokenAddress,
             oracleAddress
         );
+
+        console.log("New position manager is: %s", newPositionManager);
+        return newPositionManager;
     }
 
     function updateMarketPricefeed(

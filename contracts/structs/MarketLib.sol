@@ -1,10 +1,12 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.28;
 
-import "./MaxSkipListV2Lib.sol";
+import "./TestMaxSkipListV2Lib.sol";
 import "./MinSkipListV2Lib.sol";
 import "@openzeppelin/contracts/utils/math/Math.sol";
 import "@openzeppelin/contracts/utils/math/SignedMath.sol";
+import "@openzeppelin/contracts/utils/structs/Heap.sol";
+import "hardhat/console.sol";
 
 library MarketLib {
     using MaxSkipListV2 for MaxSkipListV2.List;
@@ -345,9 +347,11 @@ library MarketLib {
                 priceListShorts.insert(liquidationPrice);
             }
         }
-
+        // console.log("About to write position ID to liquidation mapping...");
         // Add position to liquidation mappings
         liquidationMappings[liquidationPrice].push(positionId);
+        // console.log("done...");
+        // console.log("")
     }
 
     function calculatePnL(
@@ -356,7 +360,7 @@ library MarketLib {
         uint256 minimumPrice,
         uint256 minimumPositionSize,
         uint256 minimumPnl
-    ) internal view returns (int256) {
+    ) internal pure returns (int256) {
         // Input validation
         require(userPosition.entryPrice >= minimumPrice, "Entry price too low");
         require(currentPrice >= minimumPrice, "Current price too low");

@@ -3,9 +3,9 @@ pragma solidity ^0.8.28;
 import "./structs/MarketLib.sol";
 
 interface IMarketRegistry {
-    function createNewMarket(
-        MarketLib.MarketCreationParams calldata newMarket
-    ) external;
+    // function createNewMarket(
+    //     MarketLib.MarketCreationParams calldata newMarket
+    // ) external;
 
     function updateMarketPricefeed(
         address oldPricefeed,

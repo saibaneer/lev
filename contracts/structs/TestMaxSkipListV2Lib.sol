@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-library MinSkipListV2 {
+library MaxSkipListV2 {
     uint8 constant MAX_LEVEL = 8;
     uint8 constant LEVEL_MASK = uint8((1 << (MAX_LEVEL - 1)) - 1);
     uint256 constant BITMAP_MASK = 0xff;
@@ -14,7 +14,7 @@ library MinSkipListV2 {
 
     struct List {
         uint256 head;
-        uint256 lowestNodeId;    // Track lowest instead of highest
+        uint256 highestNodeId;
         uint256 length;
         uint256 nextId;
         uint256 firstFreeId;
@@ -25,7 +25,7 @@ library MinSkipListV2 {
     event NodeInserted(uint256 indexed nodeId, uint256 price);
     event NodeRemoved(uint256 indexed nodeId, uint256 price);
 
-    // Helper functions for bit manipulation - same as MaxSkipList
+    // Helper functions for bit manipulation
     function getPrice(uint256 priceAndBitmap) internal pure returns (uint256) {
         return priceAndBitmap >> 8;
     }
@@ -77,9 +77,9 @@ library MinSkipListV2 {
         uint8 newLevel = getLevel(nodeId);
         uint8 bitmap = uint8((1 << newLevel) - 1);
 
-        // Update lowest node if necessary - changed from highest to lowest
-        if (self.length == 0 || price < getPrice(self.nodes[self.lowestNodeId].priceAndBitmap)) {
-            self.lowestNodeId = nodeId;
+        // Update highest node if necessary
+        if (self.length == 0 || price > getPrice(self.nodes[self.highestNodeId].priceAndBitmap)) {
+            self.highestNodeId = nodeId;
         }
 
         // Initialize new node
@@ -90,12 +90,12 @@ library MinSkipListV2 {
         uint256 current = self.head;
         uint256[MAX_LEVEL] memory updates;
 
-        // Changed comparison to > for minimum ordering
+        // Fixed the problematic loop
         for (int8 i = int8(MAX_LEVEL) - 1; i >= 0; i--) {
             uint8 level = uint8(i);
             while (true) {
                 (uint256 next, ) = unpackPointers(self.nodes[current].packedNextPrev[level]);
-                if (next == 0 || getPrice(self.nodes[next].priceAndBitmap) > price) break;
+                if (next == 0 || getPrice(self.nodes[next].priceAndBitmap) < price) break;
                 current = next;
             }
             updates[level] = current;
@@ -128,17 +128,58 @@ library MinSkipListV2 {
         return nodeId;
     }
 
-    function removeLowest(List storage self) internal returns (bool) {
+    function remove(List storage self, uint256 price) internal returns (bool) {
+        require(self.length > 0, "Empty list");
+        uint256 nodeId = self.priceToId[price];
+        require(nodeId != 0, "Price not found");
+
+        Node storage node = self.nodes[nodeId];
+        uint256 priceAndBitmap = node.priceAndBitmap;
+        uint256 next;
+        uint256 prev;
+
+        // If we're removing the highest node, update highestNodeId
+        if (nodeId == self.highestNodeId) {
+            (next, ) = unpackPointers(node.packedNextPrev[0]);
+            self.highestNodeId = next;
+        }
+
+        // Remove node from all levels it exists in
+        uint8 bitmap = getLevelBitmap(priceAndBitmap);
+        for (uint8 i = 0; i < MAX_LEVEL; i++) {
+            if ((bitmap & (1 << i)) != 0) {
+                (next, prev) = unpackPointers(node.packedNextPrev[i]);
+                if (prev != 0) {
+                    self.nodes[prev].packedNextPrev[i] = packPointers(next, prev);
+                }
+                if (next != 0) {
+                    self.nodes[next].packedNextPrev[i] = packPointers(next, prev);
+                }
+            }
+        }
+
+        // Add to free list
+        node.packedNextPrev[0] = packPointers(self.firstFreeId, 0);
+        self.firstFreeId = nodeId;
+
+        delete self.priceToId[getPrice(priceAndBitmap)];
+        self.length--;
+
+        emit NodeRemoved(nodeId, getPrice(priceAndBitmap));
+        return true;
+    }
+
+    function removeHighest(List storage self) internal returns (bool) {
         require(self.length > 0, "Empty list");
 
-        uint256 nodeId = self.lowestNodeId;
+        uint256 nodeId = self.highestNodeId;
         Node storage node = self.nodes[nodeId];
         uint256 priceAndBitmap = node.priceAndBitmap;
         uint256 next;
         uint256 prev;
 
         (next, ) = unpackPointers(node.packedNextPrev[0]);
-        self.lowestNodeId = next;
+        self.highestNodeId = next;
 
         uint8 bitmap = getLevelBitmap(priceAndBitmap);
         for (uint8 i = 0; i < MAX_LEVEL; i++) {
@@ -163,49 +204,9 @@ library MinSkipListV2 {
         return true;
     }
 
-    function getLowestPrice(List storage self) internal view returns (uint256) {
+    function getHighestPrice(List storage self) internal view returns (uint256) {
         require(self.length > 0, "Empty list");
-        return getPrice(self.nodes[self.lowestNodeId].priceAndBitmap);
-    }
-
-    function remove(List storage self, uint256 price) internal returns (bool) {
-        require(self.length > 0, "Empty list");
-        uint256 nodeId = self.priceToId[price];
-        require(nodeId != 0, "Price not found");
-
-        Node storage node = self.nodes[nodeId];
-        uint256 priceAndBitmap = node.priceAndBitmap;
-        uint256 next;
-        uint256 prev;
-
-        // If we're removing the lowest node, update lowestNodeId
-        if (nodeId == self.lowestNodeId) {
-            (next, ) = unpackPointers(node.packedNextPrev[0]);
-            self.lowestNodeId = next;
-        }
-
-        // Remove node from all levels it exists in
-        uint8 bitmap = getLevelBitmap(priceAndBitmap);
-        for (uint8 i = 0; i < MAX_LEVEL; i++) {
-            if ((bitmap & (1 << i)) != 0) {
-                (next, prev) = unpackPointers(node.packedNextPrev[i]);
-                if (prev != 0) {
-                    self.nodes[prev].packedNextPrev[i] = packPointers(next, prev);
-                }
-                if (next != 0) {
-                    self.nodes[next].packedNextPrev[i] = packPointers(next, prev);
-                }
-            }
-        }
-
-        node.packedNextPrev[0] = packPointers(self.firstFreeId, 0);
-        self.firstFreeId = nodeId;
-
-        delete self.priceToId[price];
-        self.length--;
-
-        emit NodeRemoved(nodeId, price);
-        return true;
+        return getPrice(self.nodes[self.highestNodeId].priceAndBitmap);
     }
 
     function initialize(List storage self) internal {
