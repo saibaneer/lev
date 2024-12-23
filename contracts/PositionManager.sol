@@ -11,7 +11,7 @@ import "./structs/MaxSkipListV2Lib.sol";
 import "./structs/MinSkipListV2Lib.sol";
 import "./structs/ConstantsLib.sol";
 import "./structs/ErrorLib.sol";
-import "./IPricefeed.sol";
+import "./IOracle.sol";
 
 /// @title Position Manager Contract
 /// @notice Manages leveraged trading positions including creation, updates, and liquidations
@@ -28,6 +28,9 @@ contract PositionManager is Initializable, IPositionManager {
 
     /// @notice Skip list tracking short positions by price
     MinSkipListV2.List private priceListShorts;
+
+    /// @notice Address of the oracle contract
+    address public oracleAddress;
 
     /// @notice Address of the price feed contract
     address public pricefeedAddress;
@@ -67,7 +70,8 @@ contract PositionManager is Initializable, IPositionManager {
         address _marketRegistry,
         uint8 _maintenanceMargin,
         address _vaultAddress,
-        address _collateralTokenAddress
+        address _collateralTokenAddress,
+        address _oracleAddress
     ) public initializer {
         priceListLongs.initialize();
         priceListShorts.initialize();
@@ -76,12 +80,13 @@ contract PositionManager is Initializable, IPositionManager {
         marketRegistry = _marketRegistry;
         vaultAddress = _vaultAddress;
         collateralTokenAddress = _collateralTokenAddress;
+        oracleAddress = _oracleAddress;
     }
 
     /// @notice Creates a new trading position
     /// @dev Updates relevant mappings and market registry
     /// @param newPosition Parameters for the new position
-    function createPosition(
+    function createMarketPosition(
         MarketLib.PositionParams memory newPosition
     ) external {
         require(
@@ -93,12 +98,16 @@ contract PositionManager is Initializable, IPositionManager {
             ErrorLib.MAX_COLLATERAL_EXCEEDED
         );
         userNonce[newPosition.positionOwner] += 1;
+        uint256 currentAssetPrice = IOracle(oracleAddress).getAssetPrice(
+            pricefeedAddress
+        );
         MarketLib.UserPosition memory createdPosition = MarketLib
             .createUserPosition(
                 maintenanceMargin,
                 newPosition,
                 userNonce[newPosition.positionOwner],
-                pricefeedAddress
+                pricefeedAddress,
+                currentAssetPrice
             );
 
         MarketLib.pushPosition(
@@ -154,7 +163,7 @@ contract PositionManager is Initializable, IPositionManager {
                 idToPositionMappings
             );
 
-        uint256 assetPrice = IPricefeed(pricefeedAddress).getAssetPrice(
+        uint256 assetPrice = IOracle(oracleAddress).getAssetPrice(
             pricefeedAddress
         );
         if (pos.longOrShort == MarketLib.Direction.Long) {
@@ -208,7 +217,7 @@ contract PositionManager is Initializable, IPositionManager {
         MarketLib.UserPosition storage pos = idToPositionMappings[positionId];
         MarketLib.validateLiquidation(pos, msg.sender);
 
-        uint256 currentAssetPrice = IPricefeed(pricefeedAddress).getAssetPrice(
+        uint256 currentAssetPrice = IOracle(oracleAddress).getAssetPrice(
             pos.pricefeedAddress
         );
         require(
@@ -253,7 +262,7 @@ contract PositionManager is Initializable, IPositionManager {
             ErrorLib.POSITION_DOES_NOT_EXIST
         );
         require(pos.positionOwner == msg.sender, ErrorLib.UNAUTHORIZED_ACCESS);
-        uint256 currentAssetPrice = IPricefeed(pricefeedAddress).getAssetPrice(
+        uint256 currentAssetPrice = IOracle(oracleAddress).getAssetPrice(
             pos.pricefeedAddress
         );
         //calculate PnL

@@ -8,10 +8,11 @@ interface IPositionManager {
         address _marketRegistry,
         uint8 _maintenanceMargin,
         address _vaultAddress,
-        address _collateralTokenAddress
+        address _collateralTokenAddress,
+        address _oracleAddress
     ) external;
 
-    function createPosition(
+    function createMarketPosition(
         MarketLib.PositionParams memory newPosition
     ) external;
 

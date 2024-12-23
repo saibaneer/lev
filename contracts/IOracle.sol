@@ -2,7 +2,7 @@
 pragma solidity ^0.8.28;
 
 
-interface IPricefeed {
+interface IOracle {
     function setPrice(uint256 price, address tokenAddress) external;
     function getAssetPrice(address tokenAddress) external  view returns(uint256);
 }

@@ -14,6 +14,7 @@ contract MarketRegistry is IMarketRegistry {
     address public factoryPositionManager;
     address public vaultAddress;
     address public collateralTokenAddress;
+    address public oracleAddress;
     uint8 public constant MAINTENANCE_MARGIN = 5;
 
     function createNewMarket(
@@ -29,7 +30,8 @@ contract MarketRegistry is IMarketRegistry {
             address(this),
             MAINTENANCE_MARGIN,
             vaultAddress,
-            collateralTokenAddress
+            collateralTokenAddress,
+            oracleAddress
         );
     }
 
@@ -74,5 +76,13 @@ contract MarketRegistry is IMarketRegistry {
         address _collateralTokenAddress
     ) external {
         collateralTokenAddress = _collateralTokenAddress;
+    }
+
+    function setFactoryPositionManager(address _address) external {
+        factoryPositionManager = _address;
+    }
+
+    function setOracleAddress(address _address) external {
+        oracleAddress = _address;
     }
 }

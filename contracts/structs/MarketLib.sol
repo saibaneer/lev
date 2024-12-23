@@ -32,7 +32,6 @@ library MarketLib {
     }
 
     struct PositionParams {
-        uint256 entryPrice;
         uint256 leverage;
         uint256 collateralAmount;
         address positionOwner;
@@ -97,14 +96,15 @@ library MarketLib {
         uint256 maintenanceMargin,
         PositionParams memory pos,
         uint256 userNonce,
-        address pricefeedAddress
+        address pricefeedAddress,
+        uint256 entryPrice
     ) internal view returns (UserPosition memory outputPosition) {
         uint256 positionSize = estimatePositionSize(
             pos.leverage,
             pos.collateralAmount
         );
         uint256 liquidationPrice = estimateLiquidationPrice(
-            pos.entryPrice,
+            entryPrice,
             pos.leverage,
             pos.collateralAmount,
             maintenanceMargin,
@@ -115,7 +115,7 @@ library MarketLib {
         outputPosition = UserPosition({
             pricefeedAddress: pricefeedAddress,
             liquidationPrice: liquidationPrice,
-            entryPrice: pos.entryPrice,
+            entryPrice: entryPrice,
             leverage: pos.leverage,
             collateral: pos.collateralAmount,
             positionSize: positionSize,

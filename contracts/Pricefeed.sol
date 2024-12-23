@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.28;
 
-import "./IPricefeed.sol";
+import "./IOracle.sol";
 
-contract Pricefeed is IPricefeed {
+contract Oracle is IOracle {
 
     mapping(address => uint256) public tokenPricing;
     function setPrice(uint256 price, address tokenAddress) external {
@@ -11,7 +11,7 @@ contract Pricefeed is IPricefeed {
     }
 
 
-    function getAssetPrice(address tokenAddress) external  view returns(uint256) {
+    function getAssetPrice(address tokenAddress) external view returns(uint256) {
         return tokenPricing[tokenAddress];
     }
 }
