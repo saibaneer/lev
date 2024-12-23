@@ -24,6 +24,7 @@ library MarketLib {
 
     struct LeverageMarket {
         address priceFeedAddress; // unique identifier
+        address positionManagerAddress;
         uint256 assetSize;
         uint256 totalLongSize;
         uint256 totalShortSize;
@@ -221,11 +222,13 @@ library MarketLib {
 
     function createNewMarket(
         MarketCreationParams calldata newMarket,
-        mapping(address => LeverageMarket) storage allMarkets
+        mapping(address => LeverageMarket) storage allMarkets,
+        address _positionManagerAddress
     ) internal {
         //TODO: ensure that only 1 market can be created per address
         allMarkets[newMarket.priceFeedAddress] = LeverageMarket({
             priceFeedAddress: newMarket.priceFeedAddress,
+            positionManagerAddress: _positionManagerAddress,
             assetSize: newMarket.assetSize,
             totalLongSize: 0,
             totalShortSize: 0,

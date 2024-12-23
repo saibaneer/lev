@@ -22,9 +22,10 @@ contract MarketRegistry is IMarketRegistry {
     ) external {
         //require that the market does not previously exist.
         require(vaultAddress != address(0), "Set vault address");
-        MarketLib.createNewMarket(newMarket, markets);
+        
         // create position manager
         address newPositionManager = factoryPositionManager.clone();
+        MarketLib.createNewMarket(newMarket, markets, newPositionManager);
         IPositionManager(newPositionManager).initialize(
             newMarket.priceFeedAddress,
             address(this),

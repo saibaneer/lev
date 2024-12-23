@@ -6,13 +6,12 @@ import { anyValue } from "@nomicfoundation/hardhat-chai-matchers/withArgs";
 import { expect } from "chai";
 import hre, { ethers } from "hardhat";
 import { Pricefeed } from "../typechain-types/Pricefeed";
-import { Pricefeed__factory } from "../typechain-types";
 
 describe("Pricefeed Tests", function () {
   async function deployPriceFeed() {
     const [owner, otherAccount] = await hre.ethers.getSigners();
 
-    const Pricefeed = await hre.ethers.getContractFactory("Pricefeed");
+    const Pricefeed = await hre.ethers.getContractFactory("Oracle");
     const pricefeed = await Pricefeed.deploy();
 
     const StableCoin = await hre.ethers.getContractFactory("USDT");
