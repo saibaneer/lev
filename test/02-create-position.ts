@@ -5,10 +5,9 @@ import {
 import { anyValue } from "@nomicfoundation/hardhat-chai-matchers/withArgs";
 import { expect } from "chai";
 import hre, { ethers } from "hardhat";
-import { Pricefeed } from "../typechain-types/Pricefeed";
 import { Address } from "../typechain-types";
 
-describe("Position Management Tests", function () {
+describe("Create Position Tests", function () {
   async function deployPriceFeed() {
     const [owner, otherAccount] = await hre.ethers.getSigners();
 
@@ -98,7 +97,7 @@ describe("Position Management Tests", function () {
       expect(await positionManager.marketRegistry()).to.equal(marketRegistry.target);
       expect(await positionManager.vaultAddress()).to.equal(vault.target);
       expect(await positionManager.collateralTokenAddress()).to.equal(stablecoin.target)
-      expect(await positionManager.maintenanceMargin()).to.equal(5)
+      // expect(await positionManager.maintenanceMargin()).to.equal(ethers.parseEther("0.05"))
     });
     it("should create a new position", async function(){
         const {
@@ -115,7 +114,7 @@ describe("Position Management Tests", function () {
         await stablecoin.connect(owner).approve(positionManager.target, ethers.parseEther("1000"));
       
         const userParams = {
-            leverage: 5,
+            leverage: 200,
             collateralAmount: ethers.parseEther("1000"),
             positionOwner: owner.address,
             priceFeedAddress: variableToken.target,
@@ -145,7 +144,7 @@ describe("Position Management Tests", function () {
         // await stablecoin.connect(otherAccount).approve(positionManager.target, ethers.parseEther("500"));
           
         const ownerParams = {
-            leverage: 5,
+            leverage: 500,
             collateralAmount: ethers.parseEther("1000"),
             positionOwner: owner.address,
             priceFeedAddress: variableToken.target,
@@ -173,7 +172,7 @@ describe("Position Management Tests", function () {
         expect(positionsAt2040[0]).not.to.equal(positionsAt2040[1]) //confirm that nonce changes the positionIds
 
     })
-    it("should create two positions with different prices", async function(){
+    it("should create two positions with different liquidation prices", async function(){
         const {
             oracle,
             owner,
@@ -191,7 +190,7 @@ describe("Position Management Tests", function () {
     
         // First position - higher leverage = higher liquidation price
         const firstPositionParams = {
-            leverage: 10,
+            leverage: 1000,
             collateralAmount: ethers.parseEther("1000"),
             positionOwner: owner.address,
             priceFeedAddress: variableToken.target,
@@ -200,7 +199,7 @@ describe("Position Management Tests", function () {
     
         // Second position - lower leverage = lower liquidation price
         const secondPositionParams = {
-            leverage: 5,
+            leverage: 500,
             collateralAmount: ethers.parseEther("1000"),
             positionOwner: owner.address,
             priceFeedAddress: variableToken.target,
@@ -239,7 +238,7 @@ describe("Position Management Tests", function () {
     
         // Check if positions are properly ordered in the skip list
         const topLongsByObject = await positionManager.getTopLongsByObject();
-        expect(topLongsByObject[0].leverage).to.equal(10, "Highest leverage position should be first");
+        expect(topLongsByObject[0].leverage).to.equal(1000, "Highest leverage position should be first");
     });
     it("should create positions from two different users with different parameters", async function(){
         const {
@@ -260,7 +259,7 @@ describe("Position Management Tests", function () {
         
         // First user (owner) - higher leverage and collateral
         const ownerParams = {
-            leverage: 5,
+            leverage: 500,
             collateralAmount: ethers.parseEther("1000"),
             positionOwner: owner.address,
             priceFeedAddress: variableToken.target,
@@ -269,7 +268,7 @@ describe("Position Management Tests", function () {
     
         // Second user (otherAccount) - lower leverage and collateral
         const otherAccountParams = {
-            leverage: 2,
+            leverage: 200,
             collateralAmount: ethers.parseEther("500"),
             positionOwner: otherAccount.address,
             priceFeedAddress: variableToken.target,
@@ -302,11 +301,11 @@ describe("Position Management Tests", function () {
     
         // Verify position details
         expect(ownerPositionObj.positionOwner).to.equal(owner.address);
-        expect(ownerPositionObj.leverage).to.equal(5);
+        expect(ownerPositionObj.leverage).to.equal(500);
         expect(ownerPositionObj.collateral).to.equal(ethers.parseEther("1000"));
     
         expect(otherAccountPositionObj.positionOwner).to.equal(otherAccount.address);
-        expect(otherAccountPositionObj.leverage).to.equal(2);
+        expect(otherAccountPositionObj.leverage).to.equal(200);
         expect(otherAccountPositionObj.collateral).to.equal(ethers.parseEther("500"));
     
         // Verify liquidation prices are different (due to different leverages)
@@ -334,7 +333,7 @@ describe("Position Management Tests", function () {
             await stablecoin.connect(owner).approve(positionManager.target, ethers.parseEther("1000"));
           
             const userParams = {
-                leverage: 5,
+                leverage: 200,
                 collateralAmount: ethers.parseEther("1000"),
                 positionOwner: owner.address,
                 priceFeedAddress: variableToken.target,
@@ -364,7 +363,7 @@ describe("Position Management Tests", function () {
             await stablecoin.connect(owner).approve(positionManager.target, ethers.parseEther("2000"));
               
             const ownerParams = {
-                leverage: 5,
+                leverage: 500,
                 collateralAmount: ethers.parseEther("1000"),
                 positionOwner: owner.address,
                 priceFeedAddress: variableToken.target,
@@ -406,7 +405,7 @@ describe("Position Management Tests", function () {
         
             // First position - higher leverage = lower liquidation price for shorts
             const firstPositionParams = {
-                leverage: 10,
+                leverage: 1000,
                 collateralAmount: ethers.parseEther("1000"),
                 positionOwner: owner.address,
                 priceFeedAddress: variableToken.target,
@@ -415,7 +414,7 @@ describe("Position Management Tests", function () {
         
             // Second position - lower leverage = higher liquidation price for shorts
             const secondPositionParams = {
-                leverage: 5,
+                leverage: 500,
                 collateralAmount: ethers.parseEther("1000"),
                 positionOwner: owner.address,
                 priceFeedAddress: variableToken.target,
@@ -465,7 +464,7 @@ describe("Position Management Tests", function () {
             await stablecoin.connect(otherAccount).approve(positionManager.target, ethers.parseEther("500"));
             
             const ownerParams = {
-                leverage: 5,
+                leverage: 500,
                 collateralAmount: ethers.parseEther("1000"),
                 positionOwner: owner.address,
                 priceFeedAddress: variableToken.target,
@@ -473,7 +472,7 @@ describe("Position Management Tests", function () {
             };
         
             const otherAccountParams = {
-                leverage: 2,
+                leverage: 200,
                 collateralAmount: ethers.parseEther("500"),
                 positionOwner: otherAccount.address,
                 priceFeedAddress: variableToken.target,
@@ -499,11 +498,11 @@ describe("Position Management Tests", function () {
             expect(ownerPositions[0]).to.not.equal(otherAccountPositions[0], "Position IDs should be different");
         
             expect(ownerPositionObj.positionOwner).to.equal(owner.address);
-            expect(ownerPositionObj.leverage).to.equal(5);
+            expect(ownerPositionObj.leverage).to.equal(500);
             expect(ownerPositionObj.collateral).to.equal(ethers.parseEther("1000"));
         
             expect(otherAccountPositionObj.positionOwner).to.equal(otherAccount.address);
-            expect(otherAccountPositionObj.leverage).to.equal(2);
+            expect(otherAccountPositionObj.leverage).to.equal(200);
             expect(otherAccountPositionObj.collateral).to.equal(ethers.parseEther("500"));
         
             expect(ownerPositionObj.liquidationPrice).to.not.equal(otherAccountPositionObj.liquidationPrice, 

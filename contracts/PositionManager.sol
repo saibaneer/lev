@@ -6,11 +6,12 @@ import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "./IPositionManager.sol";
 import "./IVault.sol";
 import "./IMarketRegistry.sol";
-import "./structs/MarketLib.sol";
-import "./structs/TestMaxSkipListV2Lib.sol";
-import "./structs/MinSkipListV2Lib.sol";
-import "./structs/ConstantsLib.sol";
-import "./structs/ErrorLib.sol";
+import "./library/MarketLib.sol";
+import "./library/TestMaxSkipListV2Lib.sol";
+import "./library/MinSkipListV2Lib.sol";
+import "./library/ConstantsLib.sol";
+import "./library/ErrorLib.sol";
+import "./library/LiquidationMathLib.sol";
 import "./IOracle.sol";
 
 /// @title Position Manager Contract
@@ -22,6 +23,7 @@ contract PositionManager is Initializable, IPositionManager {
     using MaxSkipListV2 for MaxSkipListV2.List;
     using MinSkipListV2 for MinSkipListV2.List;
     using SafeERC20 for IERC20;
+    using LiquidationMath for *;
 
     /// @notice Skip list tracking long positions by price
     MaxSkipListV2.List private priceListLongs;
@@ -48,7 +50,7 @@ contract PositionManager is Initializable, IPositionManager {
     mapping(uint256 => bytes32[]) public liquidationMappings;
 
     /// @notice Maps position IDs to position details
-    mapping(bytes32 => MarketLib.UserPosition) public idToPositionMappings;
+    mapping(bytes32 => StructsLib.UserPosition) public idToPositionMappings;
 
     /// @notice Tracks the nonce for each user's positions
     mapping(address => uint256) public userNonce;
@@ -56,8 +58,6 @@ contract PositionManager is Initializable, IPositionManager {
     /// @notice Maps user addresses to their position IDs
     mapping(address => bytes32[]) public userToPositionMappings;
 
-    /// @notice The maintenance margin requirement as a percentage
-    uint8 public maintenanceMargin;
 
     /// @notice Initializes the contract with required parameters
     /// @param _pricefeed Address of the price feed contract
@@ -68,7 +68,7 @@ contract PositionManager is Initializable, IPositionManager {
     function initialize(
         address _pricefeed,
         address _marketRegistry,
-        uint8 _maintenanceMargin,
+        uint256 _maintenanceMargin,
         address _vaultAddress,
         address _collateralTokenAddress,
         address _oracleAddress
@@ -76,7 +76,6 @@ contract PositionManager is Initializable, IPositionManager {
         priceListLongs.initialize();
         priceListShorts.initialize();
         pricefeedAddress = _pricefeed;
-        maintenanceMargin = _maintenanceMargin;
         marketRegistry = _marketRegistry;
         vaultAddress = _vaultAddress;
         collateralTokenAddress = _collateralTokenAddress;
@@ -87,7 +86,7 @@ contract PositionManager is Initializable, IPositionManager {
     /// @dev Updates relevant mappings and market registry
     /// @param newPosition Parameters for the new position
     function createMarketPosition(
-        MarketLib.PositionParams memory newPosition
+        StructsLib.PositionParams memory newPosition
     ) external {
         require(
             msg.sender == newPosition.positionOwner,
@@ -101,9 +100,8 @@ contract PositionManager is Initializable, IPositionManager {
         uint256 currentAssetPrice = IOracle(oracleAddress).getAssetPrice(
             pricefeedAddress
         );
-        MarketLib.UserPosition memory createdPosition = MarketLib
+        StructsLib.UserPosition memory createdPosition = MarketLib
             .createUserPosition(
-                maintenanceMargin,
                 newPosition,
                 userNonce[newPosition.positionOwner],
                 pricefeedAddress,
@@ -139,38 +137,52 @@ contract PositionManager is Initializable, IPositionManager {
     /// @param positionId The ID of the position to update
     /// @param amountToAdd The amount of collateral to add (positive) or remove (negative)
     function updatePosition(bytes32 positionId, int256 amountToAdd) external {
-        MarketLib.UserPosition storage pos = idToPositionMappings[positionId];
+        StructsLib.UserPosition storage pos = idToPositionMappings[positionId];
         require(
             pos.positionOwner != address(0),
             ErrorLib.POSITION_DOES_NOT_EXIST
         );
         require(pos.positionOwner == msg.sender, ErrorLib.UNAUTHORIZED_ACCESS);
-        IERC20 collateralToken = IERC20(collateralTokenAddress);
 
+        // Clean up old position data
         MarketLib.cleanupSkipLists(
             pos,
             liquidationMappings,
             priceListLongs,
             priceListShorts
         );
-
         MarketLib.removePositionFromLiquidationMappings(
             positionId,
             pos.liquidationPrice,
             liquidationMappings
         );
-        uint256 newLiquidationPrice = MarketLib
+
+        
+
+        // Then calculate new liquidation price based on updated collateral
+        (uint256 newLiquidationPrice, uint256 effectiveLeverage) = MarketLib
             .getNewLiquidationPriceAfterCollateralChange(
                 positionId,
                 amountToAdd,
-                maintenanceMargin,
                 idToPositionMappings
             );
 
+        // Update collateral first
+        if (amountToAdd >= 0) {
+            pos.collateral += uint256(amountToAdd);
+        } else {
+            require(
+                pos.collateral >= uint256(-amountToAdd),
+                ErrorLib.INSUFFICIENT_COLLATERAL
+            );
+            pos.collateral -= uint256(-amountToAdd);
+        }
+
+        // Verify new liquidation price against current asset price
         uint256 assetPrice = IOracle(oracleAddress).getAssetPrice(
             pricefeedAddress
         );
-        if (pos.longOrShort == MarketLib.Direction.Long) {
+        if (pos.longOrShort == StructsLib.Direction.Long) {
             require(
                 newLiquidationPrice < assetPrice,
                 ErrorLib.PRICE_IS_HIGHER_THAN_CURRENT_ASSET_PRICE
@@ -182,18 +194,11 @@ contract PositionManager is Initializable, IPositionManager {
             );
         }
 
+        // Update position with new values
         pos.liquidationPrice = newLiquidationPrice;
+        pos.leverage = effectiveLeverage;
 
-        if (amountToAdd >= 0) {
-            pos.collateral += uint256(amountToAdd);
-        } else {
-            require(
-                pos.collateral >= uint256(-amountToAdd),
-                ErrorLib.INSUFFICIENT_COLLATERAL
-            );
-            pos.collateral -= uint256(-amountToAdd);
-        }
-
+        // Add updated position back to data structures
         MarketLib.pushPosition(
             pos,
             liquidationMappings,
@@ -201,6 +206,8 @@ contract PositionManager is Initializable, IPositionManager {
             priceListShorts
         );
 
+        // Handle token transfers
+        IERC20 collateralToken = IERC20(collateralTokenAddress);
         if (amountToAdd > 0) {
             collateralToken.safeTransferFrom(
                 msg.sender,
@@ -209,8 +216,7 @@ contract PositionManager is Initializable, IPositionManager {
             );
             collateralToken.safeTransferFrom(msg.sender, vaultAddress, 0); //add fee
         } else {
-            collateralToken.safeTransfer(address(this), uint256(amountToAdd));
-            // IVault(vaultAddress).payUser(msg.sender, uint256(amountToAdd)); //pay from
+            collateralToken.safeTransfer(msg.sender, uint256(-amountToAdd));
         }
     }
 
@@ -218,7 +224,7 @@ contract PositionManager is Initializable, IPositionManager {
     /// @dev Calculates fees, cleans up position data, and distributes tokens
     /// @param positionId The ID of the position to liquidate
     function liquidatePosition(bytes32 positionId) external {
-        MarketLib.UserPosition storage pos = idToPositionMappings[positionId];
+        StructsLib.UserPosition storage pos = idToPositionMappings[positionId];
         MarketLib.validateLiquidation(pos, msg.sender);
 
         uint256 currentAssetPrice = IOracle(oracleAddress).getAssetPrice(
@@ -260,7 +266,7 @@ contract PositionManager is Initializable, IPositionManager {
     }
 
     function closePosition(bytes32 positionId) external {
-        MarketLib.UserPosition memory pos = idToPositionMappings[positionId];
+        StructsLib.UserPosition memory pos = idToPositionMappings[positionId];
         require(
             pos.positionOwner != address(0),
             ErrorLib.POSITION_DOES_NOT_EXIST
@@ -270,7 +276,7 @@ contract PositionManager is Initializable, IPositionManager {
             pos.pricefeedAddress
         );
         //calculate PnL
-        int256 pnl = MarketLib.calculatePnL(
+        int256 pnl = LiquidationMath.calculatePnL(
             pos,
             currentAssetPrice,
             ConstantsLib.MIN_PRICE,
@@ -279,12 +285,14 @@ contract PositionManager is Initializable, IPositionManager {
         );
         // if in loss deduct
         uint256 amountDue;
+        
         if (pnl < 0) {
             amountDue = pos.collateral - uint256(pnl);
         } else {
             amountDue = pos.collateral + uint256(pnl);
         }
-        MarketLib.UserPosition storage s_pos = idToPositionMappings[positionId];
+        console.log("Amount due to user is: ", amountDue);
+        StructsLib.UserPosition storage s_pos = idToPositionMappings[positionId];
         MarketLib.cleanupPosition(
             s_pos,
             positionId,
@@ -306,7 +314,9 @@ contract PositionManager is Initializable, IPositionManager {
         return userToPositionMappings[_user];
     }
 
-    function getLiquidationMappingsFromPrice(uint256 price) external view returns(bytes32[] memory){
+    function getLiquidationMappingsFromPrice(
+        uint256 price
+    ) external view returns (bytes32[] memory) {
         return liquidationMappings[price];
     }
 
@@ -319,7 +329,7 @@ contract PositionManager is Initializable, IPositionManager {
     function getTopLongsByObject()
         external
         view
-        returns (MarketLib.UserPosition[] memory)
+        returns (StructsLib.UserPosition[] memory)
     {
         uint256 highestLong = priceListLongs.getHighestPrice();
         require(highestLong > 0, "No long positions exist");
@@ -329,14 +339,12 @@ contract PositionManager is Initializable, IPositionManager {
         require(positionCount > 0, "No positions at highest price");
 
         // Create return array
-        MarketLib.UserPosition[]
-            memory allPositions = new MarketLib.UserPosition[](positionCount);
+        StructsLib.UserPosition[]
+            memory allPositions = new StructsLib.UserPosition[](positionCount);
 
         // Fill array with positions
         for (uint256 i; i < liquidationMappings[highestLong].length; i++) {
-            allPositions[i] = idToPositionMappings[
-                positionsAtPrice[i]
-            ];
+            allPositions[i] = idToPositionMappings[positionsAtPrice[i]];
         }
         return allPositions;
     }
@@ -349,7 +357,7 @@ contract PositionManager is Initializable, IPositionManager {
     function getTopShortssByObject()
         external
         view
-        returns (MarketLib.UserPosition[] memory)
+        returns (StructsLib.UserPosition[] memory)
     {
         uint256 shortestLong = priceListShorts.getLowestPrice();
         require(shortestLong > 0, "No long positions exist");
@@ -359,8 +367,8 @@ contract PositionManager is Initializable, IPositionManager {
         require(positionCount > 0, "No positions at highest price");
 
         // Create return array
-        MarketLib.UserPosition[]
-            memory allPositions = new MarketLib.UserPosition[](positionCount);
+        StructsLib.UserPosition[]
+            memory allPositions = new StructsLib.UserPosition[](positionCount);
 
         // Fill array with positions
         for (uint256 i; i < liquidationMappings[shortestLong].length; i++) {
@@ -370,6 +378,4 @@ contract PositionManager is Initializable, IPositionManager {
         }
         return allPositions;
     }
-
-   
 }

@@ -2,7 +2,8 @@
 pragma solidity ^0.8.28;
 
 import "./IMarketRegistry.sol";
-import "./structs/MarketLib.sol";
+import "./library/StructsLib.sol";
+import "./library/MarketLib.sol";
 import "./IPositionManager.sol";
 import "@openzeppelin/contracts/proxy/Clones.sol";
 import "hardhat/console.sol";
@@ -11,15 +12,15 @@ contract MarketRegistry is IMarketRegistry {
     using Clones for address;
     using MarketLib for *;
 
-    mapping(address => MarketLib.LeverageMarket) public markets;
+    mapping(address => StructsLib.LeverageMarket) public markets;
     address public factoryPositionManager;
     address public vaultAddress;
     address public collateralTokenAddress;
     address public oracleAddress;
-    uint8 public constant MAINTENANCE_MARGIN = 5;
+    uint256 public constant MAINTENANCE_MARGIN = 5e16;
 
     function createNewMarket(
-        MarketLib.MarketCreationParams calldata newMarket
+        StructsLib.MarketCreationParams calldata newMarket
     ) external returns(address) {
         //require that the market does not previously exist.
         require(vaultAddress != address(0), "Set vault address");
@@ -60,14 +61,14 @@ contract MarketRegistry is IMarketRegistry {
     }
 
     function addToTotalMarketPositions(
-        MarketLib.UserPosition calldata userPos,
+        StructsLib.UserPosition calldata userPos,
         address _pricefeed
     ) external {
         MarketLib.addToTotalMarketPositions(userPos, markets, _pricefeed);
     }
 
     function reduceFromTotalMarketPositions(
-        MarketLib.UserPosition calldata userPos,
+        StructsLib.UserPosition calldata userPos,
         address _pricefeed
     ) external {
         MarketLib.reduceFromTotalMarketPositions(userPos, markets, _pricefeed);

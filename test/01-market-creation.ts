@@ -5,7 +5,6 @@ import {
 import { anyValue } from "@nomicfoundation/hardhat-chai-matchers/withArgs";
 import { expect } from "chai";
 import hre, { ethers } from "hardhat";
-import { Pricefeed } from "../typechain-types/Pricefeed";
 import { Address } from "../typechain-types";
 
 describe("Market Creation Tests", function () {

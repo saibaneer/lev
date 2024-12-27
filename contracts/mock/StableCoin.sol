@@ -13,7 +13,7 @@ contract USDT is ERC20, Ownable, ERC20Permit {
         ERC20Permit("Stable Coin")
 
     {
-        _mint(msg.sender, 50000 * 10 ** decimals());
+        _mint(msg.sender, 5000000000 * 10 ** decimals());
     }
 
     function mint(address to, uint256 amount) public onlyOwner {

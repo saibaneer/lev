@@ -1,19 +1,19 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.28;
-import "./structs/MarketLib.sol";
+import "./library/StructsLib.sol";
 
 interface IPositionManager {
     function initialize(
         address _pricefeed,
         address _marketRegistry,
-        uint8 _maintenanceMargin,
+        uint256 _maintenanceMargin,
         address _vaultAddress,
         address _collateralTokenAddress,
         address _oracleAddress
     ) external;
 
     function createMarketPosition(
-        MarketLib.PositionParams memory newPosition
+        StructsLib.PositionParams memory newPosition
     ) external;
 
     function updatePosition(bytes32 positionId, int256 amountToAdd) external;
@@ -27,12 +27,12 @@ interface IPositionManager {
     function getTopLongsByObject()
         external
         view
-        returns (MarketLib.UserPosition[] memory);
+        returns (StructsLib.UserPosition[] memory);
 
     function getTopShortsByBytes32() external view returns (bytes32[] memory);
 
     function getTopShortssByObject()
         external
         view
-        returns (MarketLib.UserPosition[] memory);
+        returns (StructsLib.UserPosition[] memory);
 }

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.28;
-import "./structs/MarketLib.sol";
+import "./library/StructsLib.sol";
 
 interface IMarketRegistry {
     // function createNewMarket(
@@ -17,7 +17,7 @@ interface IMarketRegistry {
         uint256 newLeverageValue
     ) external;
 
-    function addToTotalMarketPositions(MarketLib.UserPosition calldata userPos, address _pricefeed) external;
+    function addToTotalMarketPositions(StructsLib.UserPosition calldata userPos, address _pricefeed) external;
 
-    function reduceFromTotalMarketPositions(MarketLib.UserPosition calldata userPos, address _pricefeed) external;
+    function reduceFromTotalMarketPositions(StructsLib.UserPosition calldata userPos, address _pricefeed) external;
 }

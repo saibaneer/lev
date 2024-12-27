@@ -7,55 +7,17 @@ import "@openzeppelin/contracts/utils/math/Math.sol";
 import "@openzeppelin/contracts/utils/math/SignedMath.sol";
 import "@openzeppelin/contracts/utils/structs/Heap.sol";
 import "hardhat/console.sol";
+import "./StructsLib.sol";
+import "./LiquidationMathLib.sol";
 
 library MarketLib {
     using MaxSkipListV2 for MaxSkipListV2.List;
     using MinSkipListV2 for MinSkipListV2.List;
+    using StructsLib for *;
+    using LiquidationMath for *;
 
-    enum Direction {
-        Long,
-        Short
-    }
-
-    struct MarketCreationParams {
-        address priceFeedAddress; // unique identifier
-        uint256 assetSize;
-        uint256 decimals;
-        uint256 maximumLeverage;
-    }
-
-    struct LeverageMarket {
-        address priceFeedAddress; // unique identifier
-        address positionManagerAddress;
-        uint256 assetSize;
-        uint256 totalLongSize;
-        uint256 totalShortSize;
-        uint256 decimals;
-        uint256 maximumLeverage; // add a minimum leverage
-    }
-
-    struct PositionParams {
-        uint256 leverage;
-        uint256 collateralAmount;
-        address positionOwner;
-        address priceFeedAddress; // asset address
-        Direction longOrShort;
-    }
-
-    struct UserPosition {
-        address pricefeedAddress;
-        uint256 liquidationPrice;
-        uint256 entryPrice;
-        uint256 leverage;
-        uint256 collateral;
-        uint256 positionSize; //may be unneccesary
-        bytes32 positionId; // unique identifier
-        address positionOwner;
-        Direction longOrShort;
-        uint256 lastUpdatedTime;
-        int256 cumulativeFundingValue;
-        int256 profitOrLoss;
-    }
+    uint256 constant SCALE = 1e18;
+    uint256 constant LEVERAGE_SCALE = 100;
 
     function id(
         address positionOwner,
@@ -72,50 +34,28 @@ library MarketLib {
         uint256 leverage,
         uint256 collateral
     ) internal pure returns (uint256) {
-        return leverage * collateral;
+        return (leverage * collateral)/100;
     }
 
-    function estimateLiquidationPrice(
-        uint256 entryPrice,
-        uint256 leverage,
-        uint256 collateral,
-        uint256 maintenanceMargin,
-        Direction longOrShort
-    ) internal pure returns (uint256) {
-        uint256 positionSize = estimatePositionSize(leverage, collateral);
-        uint maintenanceMarginRequired = (positionSize * maintenanceMargin) /
-            100;
-        uint256 maximumLossUserCanBear = collateral - maintenanceMarginRequired;
-        uint256 maxSustainablePriceDelta = (maximumLossUserCanBear *
-            entryPrice) / positionSize;
-
-        return
-            longOrShort == Direction.Long
-                ? entryPrice - maxSustainablePriceDelta
-                : entryPrice + maxSustainablePriceDelta;
-    }
-
+    
     function createUserPosition(
-        uint256 maintenanceMargin,
-        PositionParams memory pos,
+        StructsLib.PositionParams memory pos,
         uint256 userNonce,
         address pricefeedAddress,
         uint256 entryPrice
-    ) internal view returns (UserPosition memory outputPosition) {
+    ) internal view returns (StructsLib.UserPosition memory outputPosition) {
         uint256 positionSize = estimatePositionSize(
             pos.leverage,
             pos.collateralAmount
         );
-        uint256 liquidationPrice = estimateLiquidationPrice(
+        uint256 liquidationPrice = LiquidationMath.calculateLiquidationPrice(
+            pos.longOrShort == StructsLib.Direction.Long,
             entryPrice,
-            pos.leverage,
-            pos.collateralAmount,
-            maintenanceMargin,
-            pos.longOrShort
+            pos.leverage
         );
         bytes32 positionId = id(pos.positionOwner, userNonce, pricefeedAddress);
 
-        outputPosition = UserPosition({
+        outputPosition = StructsLib.UserPosition({
             pricefeedAddress: pricefeedAddress,
             liquidationPrice: liquidationPrice,
             entryPrice: entryPrice,
@@ -198,37 +138,56 @@ library MarketLib {
     function getNewLiquidationPriceAfterCollateralChange(
         bytes32 positionId,
         int256 collateralChange,
-        uint256 maintainanceMargin,
-        mapping(bytes32 => UserPosition) storage userPositionMappings
-    ) internal view returns (uint256) {
-        UserPosition storage pos = userPositionMappings[positionId];
+        mapping(bytes32 => StructsLib.UserPosition) storage userPositionMappings
+    )
+        internal
+        view
+        returns (uint256 newLiqPrice, uint256 newEffectiveLeverage)
+    {
+        StructsLib.UserPosition storage pos = userPositionMappings[positionId];
+
+        console.log("Current collateral before casting is: ", pos.collateral);
 
         // Convert to signed for safe math
         int256 currentCollateral = int256(pos.collateral);
+        console.log("Current collateral is: ");
+        console.logInt(currentCollateral);
+
         int256 newCollateralSigned = currentCollateral + collateralChange;
+        console.log("Collateral change is: ");
+        console.logInt(collateralChange);
+
+        console.log("New collateral is: ");
+        console.logInt(newCollateralSigned);
 
         // Ensure new collateral is positive
         require(newCollateralSigned > 0, "Invalid collateral amount");
 
         uint256 newCollateral = uint256(newCollateralSigned);
 
-        return
-            estimateLiquidationPrice(
-                pos.entryPrice,
-                pos.leverage,
-                newCollateral,
-                maintainanceMargin,
-                pos.longOrShort
-            );
+        // Calculate new effective leverage in bips
+        newEffectiveLeverage = pos.positionSize*100/newCollateral;
+        console.log("New collateral is: %s", newCollateral);
+        console.log("Position size is: %s", pos.positionSize);
+        console.log("New effective leverage is: %s", newEffectiveLeverage);
+
+        // Calculate new liquidation price using individual parameters
+        newLiqPrice = LiquidationMath.calculateLiquidationPrice(
+            pos.longOrShort == StructsLib.Direction.Long,
+            pos.entryPrice,
+            newEffectiveLeverage
+        );
+
+        return (newLiqPrice, newEffectiveLeverage);
     }
 
     function createNewMarket(
-        MarketCreationParams calldata newMarket,
-        mapping(address => LeverageMarket) storage allMarkets,
+        StructsLib.MarketCreationParams calldata newMarket,
+        mapping(address => StructsLib.LeverageMarket) storage allMarkets,
         address _positionManagerAddress
     ) internal {
         //TODO: ensure that only 1 market can be created per address
-        allMarkets[newMarket.priceFeedAddress] = LeverageMarket({
+        allMarkets[newMarket.priceFeedAddress] = StructsLib.LeverageMarket({
             priceFeedAddress: newMarket.priceFeedAddress,
             positionManagerAddress: _positionManagerAddress,
             assetSize: newMarket.assetSize,
@@ -242,9 +201,9 @@ library MarketLib {
     function updateMarketPricefeed(
         address oldPricefeed,
         address newPricefeed,
-        mapping(address => LeverageMarket) storage allMarkets
+        mapping(address => StructsLib.LeverageMarket) storage allMarkets
     ) internal {
-        LeverageMarket storage oldInfo = allMarkets[oldPricefeed];
+        StructsLib.LeverageMarket storage oldInfo = allMarkets[oldPricefeed];
         oldInfo.priceFeedAddress = newPricefeed;
         allMarkets[newPricefeed] = oldInfo;
         delete allMarkets[oldPricefeed];
@@ -253,7 +212,7 @@ library MarketLib {
     function updateMarketLeverage(
         address pricefeedAddress,
         uint256 newLeverageValue,
-        mapping(address => LeverageMarket) storage allMarkets
+        mapping(address => StructsLib.LeverageMarket) storage allMarkets
     ) internal {
         allMarkets[pricefeedAddress].maximumLeverage = newLeverageValue;
     }
@@ -266,15 +225,15 @@ library MarketLib {
     }
 
     function addToTotalMarketPositions(
-        UserPosition calldata userPos,
-        mapping(address => LeverageMarket) storage markets,
+        StructsLib.UserPosition calldata userPos,
+        mapping(address => StructsLib.LeverageMarket) storage markets,
         address _pricefeed
     ) internal {
         require(
             markets[_pricefeed].priceFeedAddress == _pricefeed,
             "Bad market address"
         );
-        if (userPos.longOrShort == Direction.Long) {
+        if (userPos.longOrShort == StructsLib.Direction.Long) {
             markets[_pricefeed].totalLongSize += userPos.positionSize;
         } else {
             markets[_pricefeed].totalShortSize += userPos.positionSize;
@@ -282,15 +241,15 @@ library MarketLib {
     }
 
     function reduceFromTotalMarketPositions(
-        UserPosition calldata userPos,
-        mapping(address => LeverageMarket) storage markets,
+        StructsLib.UserPosition calldata userPos,
+        mapping(address => StructsLib.LeverageMarket) storage markets,
         address _pricefeed
     ) internal {
         require(
             markets[_pricefeed].priceFeedAddress == _pricefeed,
             "Bad market address"
         );
-        if (userPos.longOrShort == Direction.Long) {
+        if (userPos.longOrShort == StructsLib.Direction.Long) {
             markets[_pricefeed].totalLongSize -= userPos.positionSize;
         } else {
             markets[_pricefeed].totalShortSize -= userPos.positionSize;
@@ -298,7 +257,7 @@ library MarketLib {
     }
 
     function cleanupSkipLists(
-        UserPosition storage pos,
+        StructsLib.UserPosition storage pos,
         mapping(uint256 => bytes32[]) storage liquidationMappings,
         MaxSkipListV2.List storage priceListLongs,
         MinSkipListV2.List storage priceListShorts
@@ -306,7 +265,8 @@ library MarketLib {
         if (
             priceListLongs.exists(pos.liquidationPrice) &&
             liquidationMappings[pos.liquidationPrice].length < 2
-        ) {
+        ) { 
+            // console.log("Liquidation mapping at the selected price, position zero: ", liquidationMappings[pos.liquidationPrice][0]);
             //check the length
             require(
                 liquidationMappings[pos.liquidationPrice][0] == pos.positionId,
@@ -326,7 +286,7 @@ library MarketLib {
     }
 
     function pushPosition(
-        UserPosition memory createdPosition,
+        StructsLib.UserPosition memory createdPosition,
         mapping(uint256 => bytes32[]) storage liquidationMappings,
         MaxSkipListV2.List storage priceListLongs,
         MinSkipListV2.List storage priceListShorts
@@ -341,7 +301,7 @@ library MarketLib {
                 liquidationMappings
             )
         ) {
-            if (createdPosition.longOrShort == MarketLib.Direction.Long) {
+            if (createdPosition.longOrShort == StructsLib.Direction.Long) {
                 priceListLongs.insert(liquidationPrice);
             } else {
                 priceListShorts.insert(liquidationPrice);
@@ -354,73 +314,73 @@ library MarketLib {
         // console.log("")
     }
 
-    function calculatePnL(
-        UserPosition memory userPosition,
-        uint256 currentPrice,
-        uint256 minimumPrice,
-        uint256 minimumPositionSize,
-        uint256 minimumPnl
-    ) internal pure returns (int256) {
-        // Input validation
-        require(userPosition.entryPrice >= minimumPrice, "Entry price too low");
-        require(currentPrice >= minimumPrice, "Current price too low");
-        require(
-            userPosition.positionSize >= minimumPositionSize,
-            "Position too small"
-        );
+    // function calculatePnL(
+    //     StructsLib.UserPosition memory userPosition,
+    //     uint256 currentPrice,
+    //     uint256 minimumPrice,
+    //     uint256 minimumPositionSize,
+    //     uint256 minimumPnl
+    // ) internal pure returns (int256) {
+    //     // Input validation
+    //     require(userPosition.entryPrice >= minimumPrice, "Entry price too low");
+    //     require(currentPrice >= minimumPrice, "Current price too low");
+    //     require(
+    //         userPosition.positionSize >= minimumPositionSize,
+    //         "Position too small"
+    //     );
 
-        int256 size = int256(userPosition.positionSize);
-        int256 entryPrice = int256(userPosition.entryPrice);
-        int256 current = int256(currentPrice);
+    //     int256 size = int256(userPosition.positionSize);
+    //     int256 entryPrice = int256(userPosition.entryPrice);
+    //     int256 current = int256(currentPrice);
 
-        // Use OpenZeppelin's Math.max for uint256s
-        uint256 maxPrice = Math.max(userPosition.entryPrice, currentPrice);
+    //     // Use OpenZeppelin's Math.max for uint256s
+    //     uint256 maxPrice = Math.max(userPosition.entryPrice, currentPrice);
 
-        // Check for overflow before multiplication
-        require(
-            size <= type(int256).max / int256(maxPrice),
-            "Position size too large"
-        );
+    //     // Check for overflow before multiplication
+    //     require(
+    //         size <= type(int256).max / int256(maxPrice),
+    //         "Position size too large"
+    //     );
 
-        int256 pnl;
-        if (userPosition.longOrShort == Direction.Long) {
-            // Prevent underflow in price difference
-            require(
-                current >= entryPrice - type(int256).max / size,
-                "Price difference too large"
-            );
-            require(
-                current <= entryPrice + type(int256).max / size,
-                "Price difference too large"
-            );
+    //     int256 pnl;
+    //     if (userPosition.longOrShort == StructsLib.Direction.Long) {
+    //         // Prevent underflow in price difference
+    //         require(
+    //             current >= entryPrice - type(int256).max / size,
+    //             "Price difference too large"
+    //         );
+    //         require(
+    //             current <= entryPrice + type(int256).max / size,
+    //             "Price difference too large"
+    //         );
 
-            int256 priceDiff = current - entryPrice;
-            pnl = (size * priceDiff) / entryPrice;
-        } else {
-            // Similar checks for short positions
-            require(
-                entryPrice >= current - type(int256).max / size,
-                "Price difference too large"
-            );
-            require(
-                entryPrice <= current + type(int256).max / size,
-                "Price difference too large"
-            );
+    //         int256 priceDiff = current - entryPrice;
+    //         pnl = (size * priceDiff) / entryPrice;
+    //     } else {
+    //         // Similar checks for short positions
+    //         require(
+    //             entryPrice >= current - type(int256).max / size,
+    //             "Price difference too large"
+    //         );
+    //         require(
+    //             entryPrice <= current + type(int256).max / size,
+    //             "Price difference too large"
+    //         );
 
-            int256 priceDiff = entryPrice - current;
-            pnl = (size * priceDiff) / entryPrice;
-        }
+    //         int256 priceDiff = entryPrice - current;
+    //         pnl = (size * priceDiff) / entryPrice;
+    //     }
 
-        // Handle dust amounts using OpenZeppelin's SignedMath.abs
-        if (SignedMath.abs(pnl) < minimumPnl) {
-            return 0;
-        }
+    //     // Handle dust amounts using OpenZeppelin's SignedMath.abs
+    //     if (SignedMath.abs(pnl) < minimumPnl) {
+    //         return 0;
+    //     }
 
-        return pnl;
-    }
+    //     return pnl;
+    // }
 
     function validateLiquidation(
-        UserPosition storage pos,
+        StructsLib.UserPosition storage pos,
         address liquidator
     ) internal view {
         require(pos.positionOwner != address(0), "Position does not exist");
@@ -431,10 +391,10 @@ library MarketLib {
     }
 
     function isLiquidatable(
-        UserPosition storage pos,
+        StructsLib.UserPosition storage pos,
         uint256 currentPrice
     ) internal view returns (bool) {
-        if (pos.longOrShort == MarketLib.Direction.Long) {
+        if (pos.longOrShort == StructsLib.Direction.Long) {
             return currentPrice <= pos.liquidationPrice;
         } else {
             return currentPrice >= pos.liquidationPrice;
@@ -450,11 +410,12 @@ library MarketLib {
     }
 
     function cleanupPosition(
-        MarketLib.UserPosition storage pos,
+        StructsLib.UserPosition storage pos,
         bytes32 positionId,
         mapping(address => bytes32[]) storage userToPositionMappings,
         mapping(uint256 => bytes32[]) storage liquidationMappings,
-        mapping(bytes32 => UserPosition) storage idToPositionMappings,
+        mapping(bytes32 => StructsLib.UserPosition)
+            storage idToPositionMappings,
         MaxSkipListV2.List storage priceListLongs,
         MinSkipListV2.List storage priceListShorts
     ) internal {
@@ -464,18 +425,20 @@ library MarketLib {
             userToPositionMappings
         );
 
-        MarketLib.removePositionFromLiquidationMappings(
-            positionId,
-            pos.liquidationPrice,
-            liquidationMappings
-        );
-
         MarketLib.cleanupSkipLists(
             pos,
             liquidationMappings,
             priceListLongs,
             priceListShorts
         );
+
+        MarketLib.removePositionFromLiquidationMappings(
+            positionId,
+            pos.liquidationPrice,
+            liquidationMappings
+        );
+
+        
 
         delete idToPositionMappings[positionId];
     }
